@@ -55,4 +55,5 @@ QUICKSTART.md
 README.md
 scripts/
 Makefile
+iam-policies/*
 
