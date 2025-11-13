@@ -1,9 +1,9 @@
 terraform {
   backend "s3" {
-    bucket         = "company-tfstate-prod"
-    key            = "app-services/ecr.tfstate"
+    bucket         = "med-app-remotestate-prod"
+    key            = "med-app/prod.tfstate"
     region         = "us-east-1"
-    dynamodb_table = "company-tf-locks-prod"
+    dynamodb_table = "med-app-locking"
     encrypt        = true
   }
 }
