@@ -1,0 +1,61 @@
+name: Terraform Prod Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action'
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform-prod:
+    runs-on: ubuntu-latest
+    environment: production
+
+    env:
+      ENV_NAME: prod
+      AUTO_APPLY: false
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
+      ROLE_NAME: TerraformProdRole
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init
+        working-directory: envs/${{ env.ENV_NAME }}
+        run: terraform init
+
+      - name: Terraform Validate
+        working-directory: envs/${{ env.ENV_NAME }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: envs/${{ env.ENV_NAME }}
+        run: terraform plan -var-file=${{ env.ENV_NAME }}.tfvars -out=tfplan
+
+      - name: Terraform Apply
+        if: github.event.inputs.action == 'apply'
+        working-directory: envs/${{ env.ENV_NAME }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Outputs
+        working-directory: envs/${{ env.ENV_NAME }}
+        run: terraform output -json
