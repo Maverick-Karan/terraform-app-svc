@@ -25,7 +25,7 @@ provider "aws" {
 module "ecr" {
   source      = "../../modules/ecr"
   environment = "dev"
-  
+
   services = var.services
 }
 
