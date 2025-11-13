@@ -32,6 +32,7 @@ permissions:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || matrix.env == github.event.inputs.environment
     env:
       AWS_ACCOUNT_ID_DEV: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
       AWS_ACCOUNT_ID_PROD: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
@@ -43,7 +44,6 @@ jobs:
             role_name: TerraformDevRole
           - env: prod
             role_name: TerraformProdRole
-    if: github.event_name != 'workflow_dispatch' || matrix.env == github.event.inputs.environment
 
     steps:
       - name: Checkout code
