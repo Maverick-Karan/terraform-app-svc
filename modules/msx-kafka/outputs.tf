@@ -1,0 +1,20 @@
+output "cluster_arn" {
+  description = "MSK cluster ARN"
+  value       = aws_msk_cluster.main.arn
+}
+
+output "bootstrap_brokers" {
+  description = "Bootstrap broker addresses"
+  value       = aws_msk_cluster.main.bootstrap_brokers
+}
+
+output "bootstrap_brokers_tls" {
+  description = "Bootstrap broker addresses with TLS"
+  value       = aws_msk_cluster.main.bootstrap_brokers_tls
+}
+
+output "bootstrap_brokers_sasl_iam" {
+  description = "Bootstrap broker addresses with SASL/IAM"
+  value       = aws_msk_cluster.main.bootstrap_brokers_sasl_iam
+}
+

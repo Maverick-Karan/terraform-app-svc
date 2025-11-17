@@ -1,0 +1,158 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'live/**'
+      - 'modules/**'
+      - '.github/workflows/terraform-plan.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+      layer:
+        description: 'Layer'
+        required: true
+        type: choice
+        options:
+          - platform
+          - data
+          - app
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: terraform-plan
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - env: dev
+            layer: platform
+            account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+            role_name: TerraformDevRole
+          - env: dev
+            layer: data
+            account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+            role_name: TerraformDevRole
+          - env: dev
+            layer: app
+            account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+            role_name: TerraformDevRole
+          - env: stage
+            layer: platform
+            account_id: ${{ secrets.AWS_ACCOUNT_ID_STAGE }}
+            role_name: TerraformStageRole
+          - env: stage
+            layer: data
+            account_id: ${{ secrets.AWS_ACCOUNT_ID_STAGE }}
+            role_name: TerraformStageRole
+          - env: stage
+            layer: app
+            account_id: ${{ secrets.AWS_ACCOUNT_ID_STAGE }}
+            role_name: TerraformStageRole
+          - env: prod
+            layer: platform
+            account_id: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
+            role_name: TerraformProdRole
+          - env: prod
+            layer: data
+            account_id: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
+            role_name: TerraformProdRole
+          - env: prod
+            layer: app
+            account_id: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
+            role_name: TerraformProdRole
+
+    env:
+      ENV_NAME: ${{ matrix.env }}
+      LAYER: ${{ matrix.layer }}
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: ${{ matrix.account_id }}
+      ROLE_NAME: ${{ matrix.role_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Format Check
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform fmt -check -recursive
+
+      - name: Security Scan with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+          exit-code: 1
+          ignore-unfixed: true
+
+      - name: Cache Terraform Providers
+        uses: actions/cache@v4
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-${{ env.ENV_NAME }}-${{ env.LAYER }}-${{ hashFiles('modules/**', 'live/${{ env.ENV_NAME }}/${{ env.LAYER }}/*.tf') }}
+
+      - name: Terraform Init
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform init -plugin-dir ~/.terraform.d/plugin-cache
+
+      - name: Terraform Validate
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform plan -var-file=${{ env.ENV_NAME }}.tfvars -out=tfplan
+
+      - name: Save Plan Output
+        if: github.event_name == 'pull_request'
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform show -no-color tfplan > plan.txt
+
+      - name: Comment PR with Plan
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = `live/${{ env.ENV_NAME }}/${{ env.LAYER }}/plan.txt`;
+            if (fs.existsSync(path)) {
+              const plan = fs.readFileSync(path, 'utf8');
+              const body = `### Terraform Plan for **${{ env.ENV_NAME }}/${{ env.LAYER }}**\n\n\`\`\`hcl\n${plan}\n\`\`\``;
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
+            }
+
+      - name: Upload Terraform Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ env.ENV_NAME }}-${{ env.LAYER }}
+          path: live/${{ env.ENV_NAME }}/${{ env.LAYER }}/tfplan

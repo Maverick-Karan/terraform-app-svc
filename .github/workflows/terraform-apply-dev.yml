@@ -1,0 +1,139 @@
+name: Terraform Apply - Dev
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'live/dev/**'
+      - 'modules/**'
+  push:
+    branches: [main]
+    paths:
+      - 'live/dev/**'
+      - 'modules/**'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action'
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: terraform-apply-dev
+  cancel-in-progress: true
+
+jobs:
+  terraform-dev:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: development
+    strategy:
+      matrix:
+        layer: [platform, data, app]
+
+    env:
+      ENV_NAME: dev
+      LAYER: ${{ matrix.layer }}
+      AUTO_APPLY: true
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+      ROLE_NAME: TerraformDevRole
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Format Check
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform fmt -check -recursive
+
+      - name: Security Scan with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+          exit-code: 1
+          ignore-unfixed: true
+
+      - name: Cache Terraform Providers
+        uses: actions/cache@v4
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-${{ env.ENV_NAME }}-${{ env.LAYER }}-${{ hashFiles('modules/**', 'live/${{ env.ENV_NAME }}/${{ env.LAYER }}/*.tf') }}
+
+      - name: Terraform Init
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform init -plugin-dir ~/.terraform.d/plugin-cache
+
+      - name: Terraform Validate
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform plan -var-file=${{ env.ENV_NAME }}.tfvars -out=tfplan
+
+      - name: Save Plan Output
+        if: github.event_name == 'pull_request'
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform show -no-color tfplan > plan.txt
+
+      - name: Comment PR with Plan
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = `live/${{ env.ENV_NAME }}/${{ env.LAYER }}/plan.txt`;
+            if (fs.existsSync(path)) {
+              const plan = fs.readFileSync(path, 'utf8');
+              const body = `### Terraform Plan for **${{ env.ENV_NAME }}/${{ env.LAYER }}**\n\n\`\`\`hcl\n${plan}\n\`\`\``;
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
+            }
+
+      - name: Upload Terraform Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ env.ENV_NAME }}-${{ env.LAYER }}
+          path: live/${{ env.ENV_NAME }}/${{ env.LAYER }}/tfplan
+
+      - name: Terraform Apply
+        if: env.AUTO_APPLY == 'true' || github.event.inputs.action == 'apply'
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Outputs
+        working-directory: live/${{ env.ENV_NAME }}/${{ env.LAYER }}
+        run: terraform output -json
+
+      - name: Notify Slack on Failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": ":warning: *Terraform Deployment Failed* for `${{ env.ENV_NAME }}/${{ env.LAYER }}`\nRepo: `${{ github.repository }}`\nRun: `${{ github.run_id }}`\nCommit: `${{ github.sha }}\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Logs>`"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
