@@ -52,8 +52,6 @@ CONTRIBUTING.md
 DEPLOYMENT_SUMMARY.md
 PROJECT_STRUCTURE.md
 QUICKSTART.md
-README.md
 scripts/
-Makefile
 iam-policies/*
 
